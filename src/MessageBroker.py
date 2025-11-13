@@ -9,7 +9,6 @@ app = FastAPI(
     description="Python-based message broker for microservices"
 )
 
-# topic -> service -> list[Message]
 queues: Dict[str, Dict[str, List[dict]]] = {}
 
 
@@ -20,14 +19,11 @@ class RegisterRequest(BaseModel):
 
 class PublishRequest(BaseModel):
     topic: str
-    message: dict  # payload is generic JSON
+    message: dict  
 
 
 @app.post("/register")
 def register(req: RegisterRequest):
-    """
-    A service calls this to subscribe to topics.
-    """
     for topic in req.topics:
         if topic not in queues:
             queues[topic] = {}
@@ -39,12 +35,7 @@ def register(req: RegisterRequest):
 
 @app.post("/publish")
 def publish(req: PublishRequest):
-    """
-    Any service calls this to publish a message to a topic.
-    Broker pushes it to all queues of subscribed services.
-    """
     if req.topic not in queues:
-        # nobody subscribed yet, but not an error
         return {"status": "ok", "delivered_to": 0}
 
     delivered = 0
@@ -62,9 +53,7 @@ def publish(req: PublishRequest):
 
 @app.get("/consume/{service_name}/{topic}")
 def consume(service_name: str, topic: str, max_messages: int = 1):
-    """
-    Service pulls its messages from a topic.
-    """
+
     if topic not in queues or service_name not in queues[topic]:
         raise HTTPException(status_code=404, detail="No subscription for this service/topic")
 
