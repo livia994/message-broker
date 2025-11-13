@@ -1,5 +1,5 @@
 name: Build and Push Message Broker
-# For linux/windows
+# For linux/windowS
 on:
   push:
     branches: ["main"]
