@@ -1,104 +1,122 @@
 # Message Broker
 
-This repository contains a lightweight Message Broker microservice built with FastAPI.
-It provides simple publish/subscribe communication between microservices using in-memory queues.
+This repository contains a lightweight **Message Broker microservice** built with **FastAPI**.  
+It enables simple **publish/subscribe (Pub/Sub)** communication between microservices using in-memory queues.
 
 The broker supports:
-* registering services to topics
-* publishing messages
-* consuming queued messages
+- Registering services to topics  
+- Publishing messages  
+- Consuming queued messages  
 
-It is containerized with Docker and includes a GitHub Actions workflow for automatic multi-architecture image builds.
+It is fully containerized with Docker and includes a GitHub Actions workflow for automatic **multi-architecture (amd64 + arm64)** image builds.
 
-------------------------------------------------------------
+---
 
 ## Features
 
-* FastAPI-based message broker
-* Simple Pub/Sub message flow
-* Endpoints:
-  * POST /register
-  * POST /publish
-  * GET /consume/{service}/{topic}
-* In-memory message queues
-* Docker build support
-* CI/CD using GitHub Actions
+- FastAPI-based microservice  
+- Simple Pub/Sub messaging model  
+- Endpoints:
+  - `POST /register`
+  - `POST /publish`
+  - `GET /consume/{service}/{topic}`
+- In-memory message queues  
+- Docker support  
+- GitHub Actions CI/CD pipeline  
 
-------------------------------------------------------------
-
-## Project Structure
-
-message-broker/
-├─ src/
-│  └─ MessageBroker.py
-├─ requirements.txt
-├─ Dockerfile
-└─ .github/
-   └─ workflows/
-      └─ docker-image.yml
-
-------------------------------------------------------------
+---
 
 ## API Endpoints
 
-### Register a service
-POST /register
+Below are **clean, copy-ready** examples for each endpoint.
 
-Body:
+---
+
+### **1. Register a service**
+
+**POST** `/register`
+
+**Body:**
+```json
 {
   "service_name": "example-service",
   "topics": ["example.topic"]
 }
+```
 
-------------------------------------------------------------
+---
 
-### Publish a message
-POST /publish
+### **2. Publish a message**
 
-Body:
+**POST** `/publish`
+
+**Body:**
+```json
 {
   "topic": "example.topic",
   "message": { "key": "value" }
 }
+```
 
-------------------------------------------------------------
+---
 
-### Consume messages
-GET /consume/{service_name}/{topic}
+### **3. Consume messages**
 
-Example:
+**GET** `/consume/{service_name}/{topic}`
+
+**Example request:**
+```
 GET /consume/example-service/example.topic
+```
 
-------------------------------------------------------------
+Copy-ready URL version:
+```
+http://localhost:8000/consume/example-service/example.topic
+```
+
+---
 
 ## Local Development
 
 Install dependencies:
+```bash
 pip install -r requirements.txt
+```
 
 Run the service:
+```bash
 uvicorn src.MessageBroker:app --reload --host 0.0.0.0 --port 8000
+```
 
-API docs:
+Open API docs:
+```
 http://localhost:8000/docs
+```
 
-------------------------------------------------------------
+---
 
 ## Running with Docker
 
-Build image:
+Build the image:
+```bash
 docker build -t message-broker .
+```
 
-Run container:
+Run the container:
+```bash
 docker run -p 8000:8000 message-broker
+```
 
-------------------------------------------------------------
+---
 
-## CI/CD
+## CI/CD Pipeline
 
 A GitHub Actions workflow is included to:
-* build multi-architecture Docker images
-* push them to Docker Hub automatically
+
+- Build **multi-architecture** Docker images  
+- Push the images to Docker Hub automatically  
 
 Workflow file:
+```
 .github/workflows/docker-image.yml
+```
