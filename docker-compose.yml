@@ -1,18 +1,32 @@
 version: "3.9"
 
 services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq_container
+    ports:
+      - "5672:5672"     
+      - "15672:15672"    
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - microservices-network
+
   message_broker:
     image: livia994/message-broker:latest
     container_name: message_broker_container
-    platform: linux/amd64    
+    platform: linux/amd64
+    depends_on:
+      - rabbitmq
     ports:
       - "8001:8001"
     environment:
       - PYTHONUNBUFFERED=1
+      - RABBITMQ_HOST=rabbitmq
     networks:
       - microservices-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://message_broker:8001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -71,3 +85,4 @@ networks:
 
 volumes:
   mongo_data:
+  rabbitmq_data:
