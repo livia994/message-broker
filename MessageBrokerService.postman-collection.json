@@ -1,0 +1,76 @@
+{
+  "info": {
+    "name": "Message Broker - Simplified S2S Test",
+    "_postman_id": "99999999-8888-7777-6666-555555555555",
+    "description": "Minimal collection to test CharacterService → MessageBroker → TownService event flow.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Register Services",
+      "item": [
+        {
+          "name": "Register CharacterService (optional)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "http://localhost:8001/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service_name\": \"character-service\",\n  \"topics\": [\"character.joined\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "Register TownService (REQUIRED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "http://localhost:8001/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service_name\": \"town-service\",\n  \"topics\": [\"character.joined\"]\n}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Publish Event",
+      "item": [
+        {
+          "name": "Publish character.joined",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "http://localhost:8001/publish",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"topic\": \"character.joined\",\n  \"message\": {\n    \"characterId\": \"a1b2c3d4e5f6\",\n    \"userId\": \"bb22aa11-99ff-1234-cccc-987654321000\",\n    \"roleId\": 3,\n    \"role\": \"Detective\",\n    \"gold\": 80,\n    \"level\": 1,\n    \"inventory\": [],\n    \"alive\": true\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "Consume Event",
+      "item": [
+        {
+          "name": "Consume character.joined (TownService)",
+          "request": {
+            "method": "GET",
+            "url": "http://localhost:8001/consume/town-service/character.joined"
+          }
+        }
+      ]
+    }
+  ]
+}
