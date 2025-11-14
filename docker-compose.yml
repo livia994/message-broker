@@ -69,7 +69,7 @@ services:
       - microservices-network
 
   mongo:
-    image: mongo:6
+    image: mongo:4.4
     container_name: mongo_container
     platform: linux/amd64
     ports:
