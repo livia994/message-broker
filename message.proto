@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.microservices.grpc";
+option java_outer_classname = "MessageProto";
+
+package message;
+
+// Message Broker Service
+service MessageBrokerService {
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  rpc ReceiveMessage(ReceiveMessageRequest) returns (ReceiveMessageResponse);
+}
+
+message SendMessageRequest {
+  string topic = 1;
+  string payload = 2;  // JSON string
+  string reply_to = 3;  // Optional reply queue
+}
+
+message SendMessageResponse {
+  bool success = 1;
+  string message_id = 2;
+  string error_message = 3;
+}
+
+message ReceiveMessageRequest {
+  string topic = 1;
+}
+
+message ReceiveMessageResponse {
+  bool has_message = 1;
+  string message_id = 2;
+  string topic = 3;
+  string payload = 4;  // JSON string
+  string reply_to = 5;
+}
+
+// Character Data Service (for task-service to voting-service communication)
+service CharacterDataService {
+  rpc ProcessCharacterData(CharacterDataRequest) returns (CharacterDataResponse);
+}
+
+message CharacterDataRequest {
+  int32 character_id = 1;
+  int32 gold = 2;
+}
+
+message CharacterDataResponse {
+  int32 character_id = 1;
+  int32 gold = 2;
+  string status = 3;
+  string message = 4;
+}

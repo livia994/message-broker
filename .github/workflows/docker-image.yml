@@ -3,8 +3,6 @@ name: Build and Push Message Broker
 on:
   push:
     branches: ["main"]
-  pull_request:
-    branches: ["main"]
 
 env:
   DOCKER_USERNAME: livia994
