@@ -8,7 +8,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY MessageBroker.py /app/MessageBroker.py
+COPY message.proto .
 
-EXPOSE 8001
 
-CMD ["uvicorn", "MessageBroker:app", "--host", "0.0.0.0", "--port", "8001"]
+RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. message.proto
+
+EXPOSE 8001 50051
+CMD ["python", "MessageBroker.py"]
