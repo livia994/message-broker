@@ -1,17 +1,23 @@
 version: "3.9"
 
 services:
+  # =========================
+  # RABBITMQ
+  # =========================
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq_container
     ports:
-      - "5672:5672"     
-      - "15672:15672"    
+      - "5672:5672"
+      - "15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
-      - microservices-network
+      - backend
 
+  # =========================
+  # MESSAGE BROKER (Python)
+  # =========================
   message_broker:
     image: livia994/message-broker:latest
     container_name: message_broker_container
@@ -24,7 +30,7 @@ services:
       - PYTHONUNBUFFERED=1
       - RABBITMQ_HOST=rabbitmq
     networks:
-      - microservices-network
+      - backend
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 5s
@@ -32,42 +38,9 @@ services:
       retries: 5
       start_period: 5s
 
-  characters:
-    image: livia994/characterservice:latest
-    container_name: characters_container
-    platform: linux/amd64
-    depends_on:
-      message_broker:
-        condition: service_healthy
-      mongo:
-        condition: service_started
-    environment:
-      - MESSAGE_BROKER_URL=http://message_broker:8001
-      - MONGO_URI=mongodb://mongo:27017/characterDB
-      - PORT=4002
-    ports:
-      - "4002:4002"
-    networks:
-      - microservices-network
-
-  town:
-    image: livia994/townservice:latest
-    container_name: town_container
-    platform: linux/amd64
-    depends_on:
-      message_broker:
-        condition: service_healthy
-      mongo:
-        condition: service_started
-    environment:
-      - MESSAGE_BROKER_URL=http://message_broker:8001
-      - MONGO_URI=mongodb://mongo:27017/townDB
-      - PORT=4001
-    ports:
-      - "4001:4001"
-    networks:
-      - microservices-network
-
+  # =========================
+  # MONGO
+  # =========================
   mongo:
     image: mongo:4.4
     container_name: mongo_container
@@ -77,10 +50,91 @@ services:
     volumes:
       - mongo_data:/data/db
     networks:
-      - microservices-network
+      - backend
 
+  # =========================
+  # CHARACTER SEEDER
+  # =========================
+  character_seeder:
+    image: livia994/characterservice:latest
+    container_name: character_seeder
+    command: ["node", "src/db/seed/character-seed.js"]
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/characterDB
+    depends_on:
+      mongo:
+        condition: service_started
+    networks:
+      - backend
+    restart: "no"
+
+  # =========================
+  # TOWN SEEDER
+  # =========================
+  town_seeder:
+    image: livia994/townservice:latest
+    container_name: town_seeder
+    command: ["node", "src/db/seed/town-seed.js"]
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/townDB
+    depends_on:
+      mongo:
+        condition: service_started
+    networks:
+      - backend
+    restart: "no"
+
+  # =========================
+  # CHARACTER SERVICE
+  # =========================
+  characters:
+    image: livia994/characterservice:latest
+    container_name: characters_container
+    platform: linux/amd64
+    depends_on:
+      message_broker:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      character_seeder:
+        condition: service_completed_successfully
+    environment:
+      - MESSAGE_BROKER_URL=http://message_broker:8001
+      - MONGO_URI=mongodb://mongo:27017/characterDB
+      - PORT=4002
+    ports:
+      - "4002:4002"
+    networks:
+      - backend
+
+  # =========================
+  # TOWN SERVICE
+  # =========================
+  town:
+    image: livia994/townservice:latest
+    container_name: town_container
+    platform: linux/amd64
+    depends_on:
+      message_broker:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      town_seeder:
+        condition: service_completed_successfully
+    environment:
+      - MESSAGE_BROKER_URL=http://message_broker:8001
+      - MONGO_URI=mongodb://mongo:27017/townDB
+      - PORT=4001
+    ports:
+      - "4001:4001"
+    networks:
+      - backend
+
+# =========================
+# NETWORKS & VOLUMES
+# =========================
 networks:
-  microservices-network:
+  backend:
     driver: bridge
 
 volumes:
