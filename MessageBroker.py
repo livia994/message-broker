@@ -1,8 +1,3 @@
-import json
-import time
-import grpc
-from concurrent import futures
-import pika
 from pika.exceptions import AMQPConnectionError
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
