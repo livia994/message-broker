@@ -3,8 +3,16 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 from uuid import uuid4
+from concurrent import futures
 
-# Import generated protobuf files
+import json
+import time
+import grpc
+import pika
+import os
+import threading
+import logging
+import itertools
 import message_pb2
 import message_pb2_grpc
 
@@ -216,6 +224,134 @@ def consume(topic: str, max_messages: int = 1):
     print(f"REST: Consumed {len(messages)} message(s) from '{topic}'")
     return {"messages": messages, "load_balancing": "fair_dispatch"}
 
+
+# --- Service High Availability / Circuit Breaker implementation ---
+
+class CircuitBreaker:
+    def __init__(self, max_failures: int = 5, reset_timeout: int = 30):
+        self._max_failures = int(max_failures)
+        self._reset_timeout = float(reset_timeout)
+        self._failures = 0
+        self._state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self._opened_at = 0.0
+        self._lock = threading.Lock()
+
+    def is_available(self) -> bool:
+        with self._lock:
+            if self._state == "CLOSED":
+                return True
+            if self._state == "OPEN":
+                if time.time() - self._opened_at >= self._reset_timeout:
+                    self._state = "HALF_OPEN"
+                    return True
+                return False
+            return True
+
+    def record_success(self):
+        with self._lock:
+            self._failures = 0
+            self._state = "CLOSED"
+            self._opened_at = 0.0
+
+    def record_failure(self):
+        with self._lock:
+            self._failures += 1
+            if self._failures >= self._max_failures:
+                self._state = "OPEN"
+                self._opened_at = time.time()
+
+
+class ServiceInstance:
+    def __init__(self, target: str, max_failures: int = 5, reset_timeout: int = 30):
+        self.target = target.strip()
+        self.breaker = CircuitBreaker(max_failures=max_failures, reset_timeout=reset_timeout)
+        self.channel = None
+        self.stub = None
+        self._lock = threading.Lock()
+
+        try:
+            if hasattr(grpc, "insecure_channel"):
+                self.channel = grpc.insecure_channel(self.target)
+            for name, obj in vars(message_pb2_grpc).items():
+                if name.endswith("Stub") and isinstance(obj, type):
+                    self.stub = obj(self.channel)
+                    break
+        except Exception:
+            self.channel = None
+            self.stub = None
+
+    def call_rpc(self, rpc_name: str, request, timeout: float = 5.0):
+        if not self.stub:
+            raise RuntimeError(f"No stub class available in message_pb2_grpc for target {self.target}")
+
+        method = getattr(self.stub, rpc_name, None)
+        if method is None:
+            raise AttributeError(f"RPC '{rpc_name}' not found on stub for {self.target}")
+
+        return method(request, timeout=timeout)
+
+
+class ServiceHA:
+    def __init__(self, targets: list[str], max_failures: int = 5, reset_timeout: int = 30):
+        self.instances = [ServiceInstance(t, max_failures=max_failures, reset_timeout=reset_timeout) for t in (targets or [])]
+        self._idx = itertools.cycle(range(len(self.instances))) if self.instances else iter([])
+        self._global_lock = threading.Lock()
+        self._logger = logging.getLogger("ServiceHA")
+
+    def call(self, rpc_name: str, request, timeout: float = 5.0, tries: int | None = None):
+        if not self.instances:
+            raise RuntimeError("No backend targets configured for ServiceHA")
+
+        total_instances = len(self.instances)
+        tries = tries or total_instances
+
+        last_exc = None
+        attempted = set()
+
+        for _ in range(tries):
+            with self._global_lock:
+                idx = next(self._idx)
+            inst = self.instances[idx]
+
+            if idx in attempted:
+                continue
+            attempted.add(idx)
+
+            if not inst.breaker.is_available():
+                self._logger.debug(f"Instance {inst.target} circuit OPEN; skipping")
+                continue
+
+            try:
+                resp = inst.call_rpc(rpc_name, request, timeout=timeout)
+                inst.breaker.record_success()
+                return resp
+            except grpc.RpcError as e:
+                self._logger.warning(f"RPC failed to {inst.target}: {e}; marking failure")
+                inst.breaker.record_failure()
+                last_exc = e
+            except Exception as e:
+                self._logger.warning(f"Call to {inst.target} raised: {e}; marking failure")
+                inst.breaker.record_failure()
+                last_exc = e
+
+        if last_exc:
+            raise last_exc
+
+        raise RuntimeError("No healthy backend instances available")
+
+
+# --- Initialize global ServiceHA from env variable ---
+# BACKEND_TARGETS should be comma-separated list like "localhost:50051,localhost:50052"
+_targets_env = os.getenv("BACKEND_TARGETS", "localhost:50051").split(",")
+BACKEND_MAX_FAILURES = int(os.getenv("BACKEND_CIRCUIT_MAX_FAILURES", "5"))
+BACKEND_RESET_TIMEOUT = int(os.getenv("BACKEND_CIRCUIT_RESET_SECS", "30"))
+
+_service_ha = ServiceHA([t.strip() for t in _targets_env if t.strip()],
+                        max_failures=BACKEND_MAX_FAILURES,
+                        reset_timeout=BACKEND_RESET_TIMEOUT)
+
+def call_rpc_with_ha(rpc_name: str, request, timeout: float = 5.0):
+    return _service_ha.call(rpc_name, request, timeout=timeout)
 
 if __name__ == "__main__":
     import threading
