@@ -18,6 +18,8 @@ import message_pb2_grpc
 
 RABBITMQ_HOST = "rabbitmq"
 GRPC_PORT = "50051"
+TOPICS: set = set()
+_TOPICS_LOCK = threading.Lock()
 
 app = FastAPI(
     title="Message Broker",
@@ -74,6 +76,9 @@ class MessageBrokerService(message_pb2_grpc.MessageBrokerServiceServicer):
                 "payload": json.loads(request.payload),
                 "reply_to": request.reply_to if request.reply_to else None
             }
+
+            with _TOPICS_LOCK:
+                TOPICS.add(request.topic)
 
             # Publish message with persistence
             channel.basic_publish(
@@ -171,6 +176,8 @@ def register(req: RegisterRequest):
         # Durable queue for persistence
         channel.queue_declare(queue=queue_name, durable=True)
         print(f"Registered queue: {queue_name} with fair dispatch")
+    with _TOPICS_LOCK:
+            TOPICS.add(topic)
     connection.close()
     return {"status": "ok", "registered_topics": req.topics, "load_balancing": "fair_dispatch"}
 
@@ -199,6 +206,8 @@ def publish(req: PublishRequest):
             delivery_mode=2  # Persistent
         )
     )
+    with _TOPICS_LOCK:
+        TOPICS.add(req.topic)
     connection.close()
     print(f"REST: Message published to '{queue_name}' with fair dispatch")
     return {"status": "ok", "delivered_to": 1, "load_balancing": "fair_dispatch"}
@@ -224,6 +233,13 @@ def consume(topic: str, max_messages: int = 1):
     print(f"REST: Consumed {len(messages)} message(s) from '{topic}'")
     return {"messages": messages, "load_balancing": "fair_dispatch"}
 
+
+@app.get("/topics")
+def list_topics():
+    """Return the list of known topics tracked by the broker"""
+    with _TOPICS_LOCK:
+        topics_list = sorted(list(TOPICS))
+    return {"topics": topics_list, "count": len(topics_list)}
 
 # --- Service High Availability / Circuit Breaker implementation ---
 
