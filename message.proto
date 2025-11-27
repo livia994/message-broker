@@ -10,6 +10,8 @@ package message;
 service MessageBrokerService {
   rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
   rpc ReceiveMessage(ReceiveMessageRequest) returns (ReceiveMessageResponse);
+  rpc PublishDeadLetter(DeadLetter) returns (DeadLetterAck);
+  rpc ListDeadLetters(ListDeadLettersRequest) returns (ListDeadLettersResponse);
 }
 
 message SendMessageRequest {
@@ -51,4 +53,24 @@ message CharacterDataResponse {
   int32 gold = 2;
   string status = 3;
   string message = 4;
+}
+
+message DeadLetter {
+  string id = 1;               // original message id
+  string source_service = 2;   // producer service name
+  string target_service = 3;   // intended consumer service name (if any)
+  string topic = 4;            // original topic
+  string payload = 5;          // original payload
+  string reason = 6;           // description of failure
+  int32 attempt_count = 7;     // how many attempts made
+  int64 timestamp_ms = 8;      // when sent to DLQ
+}
+message DeadLetterAck {
+  bool ok = 1;
+}
+message ListDeadLettersRequest {
+  int32 limit = 1; // optional: default 100
+}
+message ListDeadLettersResponse {
+  repeated DeadLetter items = 1;
 }
