@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Deque, Optional
 from uuid import uuid4
 from concurrent import futures
-
+import uuid
 import json
 import time
 import grpc
@@ -43,14 +43,33 @@ class DurableQueueBroker:
 
     - Each topic is a separate queue.
     - Messages are kept in memory (deque) and persisted to disk as JSON Lines.
-    - On publish: append to in-memory queue + append to file.
-    - On consume: pop from in-memory queue + rewrite file without consumed messages.
-      (Inefficient for huge queues, but simple and correct for lab/demo.)
+    - Dead letters are persisted under <data_dir>/dead_letters/<topic>.jsonl
     """
+    def list_dead_letters_for_topic(self, topic: str, limit: int = 100) -> List[dict]:
+        """
+        Return up to `limit` dead-letter items for a single topic (most recent first by timestamp_ms).
+        """
+        items = []
+        with self._lock:
+            dq = self._dead_letters.get(topic, deque())
+            items = list(dq)
+        # sort descending by timestamp if present
+        try:
+            items.sort(key=lambda d: int(d.get("timestamp_ms", 0)), reverse=True)
+        except Exception:
+            pass
+        return items[:limit]
+        
     def __init__(self, data_dir: str = "broker_data"):
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Dead letters directory
+        self._dead_dir = self._data_dir / "dead_letters"
+        self._dead_dir.mkdir(parents=True, exist_ok=True)
+
         self._queues: Dict[str, Deque[dict]] = {}
+        self._dead_letters: Dict[str, Deque[dict]] = {}
         self._lock = threading.Lock()
         self._load_existing()
 
@@ -58,11 +77,15 @@ class DurableQueueBroker:
         safe_topic = topic.replace("/", "_")
         return self._data_dir / f"{safe_topic}.jsonl"
 
+    def _deadletter_file(self, topic: str) -> Path:
+        safe_topic = topic.replace("/", "_")
+        return self._dead_dir / f"{safe_topic}.jsonl"
+
     def _load_existing(self):
         """
-        Load any existing queues from disk at startup.
-        Each line is one JSON-encoded message.
+        Load existing queues and dead letters from disk at startup.
         """
+        # load normal topic queues
         for file in self._data_dir.glob("*.jsonl"):
             topic = file.stem
             dq: Deque[dict] = deque()
@@ -74,28 +97,33 @@ class DurableQueueBroker:
                             continue
                         dq.append(json.loads(line))
             except Exception:
-                # Corrupted file or similar: keep queue empty instead of crashing
                 dq = deque()
             self._queues[topic] = dq
 
+        # load existing dead letters, keep them centralized under data_dir/dead_letters
+        for file in self._dead_dir.glob("*.jsonl"):
+            topic = file.stem
+            dq: Deque[dict] = deque()
+            try:
+                with file.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        dq.append(json.loads(line))
+            except Exception:
+                dq = deque()
+            self._dead_letters[topic] = dq
+
     def declare_queue(self, name: str):
-        """
-        Ensure the queue exists (in-memory and on disk).
-        Durable in the sense that the file is kept and used to reconstruct at startup.
-        """
         with self._lock:
             if name not in self._queues:
                 self._queues[name] = deque()
-                # Touch the file so it exists
                 file = self._topic_file(name)
                 if not file.exists():
                     file.touch()
 
     def _rewrite_file(self, topic: str):
-        """
-        Rewrite the entire topic file with current in-memory messages.
-        Used after popping messages off the head of the queue.
-        """
         file = self._topic_file(topic)
         dq = self._queues.get(topic, deque())
         with file.open("w", encoding="utf-8") as f:
@@ -105,14 +133,10 @@ class DurableQueueBroker:
             os.fsync(f.fileno())
 
     def publish(self, topic: str, message: dict):
-        """
-        Append message to in-memory queue and persist to disk.
-        """
         with self._lock:
             if topic not in self._queues:
                 self._queues[topic] = deque()
             self._queues[topic].append(message)
-
             file = self._topic_file(topic)
             with file.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(message) + "\n")
@@ -120,35 +144,57 @@ class DurableQueueBroker:
                 os.fsync(f.fileno())
 
     def consume_one(self, topic: str) -> Optional[dict]:
-        """
-        Pop a single message from the head of the queue (if any) and persist the new state.
-        """
         with self._lock:
             if topic not in self._queues or not self._queues[topic]:
                 return None
-
             msg = self._queues[topic].popleft()
             self._rewrite_file(topic)
             return msg
 
     def consume_many(self, topic: str, max_messages: int) -> List[dict]:
-        """
-        Pop up to max_messages from the head of the queue and persist.
-        """
         out: List[dict] = []
         with self._lock:
             if topic not in self._queues:
                 self._queues[topic] = deque()
-
             dq = self._queues[topic]
             for _ in range(max_messages):
                 if not dq:
                     break
                 out.append(dq.popleft())
-
             if out:
                 self._rewrite_file(topic)
         return out
+
+    # -------- Dead letter operations --------
+    def publish_dead_letter(self, topic: str, dead_message: dict):
+        """
+        Persist a dead-letter message for the given topic (durably).
+        dead_message should include at least: id, topic, payload, reason, timestamp_ms, attempt_count
+        """
+        with self._lock:
+            if topic not in self._dead_letters:
+                self._dead_letters[topic] = deque()
+            self._dead_letters[topic].append(dead_message)
+            file = self._deadletter_file(topic)
+            with file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(dead_message) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+
+    def list_dead_letters(self, limit: int = 100) -> List[dict]:
+        """
+        Return up to `limit` dead-letter items across all topics, most recent first (by timestamp_ms).
+        """
+        items = []
+        with self._lock:
+            for dq in self._dead_letters.values():
+                items.extend(list(dq))
+        # sort if timestamp present; otherwise preserve insertion order
+        try:
+            items.sort(key=lambda d: int(d.get("timestamp_ms", 0)), reverse=True)
+        except Exception:
+            pass
+        return items[:limit]
 
 
 # Global broker instance (durable across process restarts via files)
@@ -159,6 +205,63 @@ broker = DurableQueueBroker(data_dir=BROKER_DATA_DIR)
 
 class MessageBrokerService(message_pb2_grpc.MessageBrokerServiceServicer):
 
+    def PublishDeadLetter(self, request, context):
+        """
+        gRPC method for publishing a dead-letter entry.
+        Uses fields present in the proto message.
+        """
+        try:
+            # Build dictionary from gRPC request (DeadLetter)
+            dl = {
+                "id": request.id if hasattr(request, "id") else str(uuid4()),
+                "source_service": request.source_service if hasattr(request, "source_service") else "",
+                "target_service": request.target_service if hasattr(request, "target_service") else "",
+                "topic": request.topic if hasattr(request, "topic") else "",
+                "payload": json.loads(request.payload) if request.payload else request.payload,
+                "reason": request.reason if hasattr(request, "reason") else "",
+                "attempt_count": int(request.attempt_count) if hasattr(request, "attempt_count") else 0,
+                "timestamp_ms": int(request.timestamp_ms) if hasattr(request, "timestamp_ms") else int(time.time() * 1000)
+            }
+
+            # persist to broker dead letters (topic-based)
+            dl_topic = dl.get("topic", "unknown")
+            broker.publish_dead_letter(dl_topic, dl)
+
+            return message_pb2.DeadLetterAck(ok=True)
+        except Exception as e:
+            print(f"Error publishing dead letter: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return message_pb2.DeadLetterAck(ok=False)
+
+    def ListDeadLetters(self, request, context):
+        """
+        gRPC method to list dead letters.
+        """
+        try:
+            limit = int(request.limit) if hasattr(request, "limit") else 100
+            items = broker.list_dead_letters(limit=limit)
+            # Build response
+            resp = message_pb2.ListDeadLettersResponse()
+            for item in items:
+                p = message_pb2.DeadLetter(
+                    id=item.get("id", ""),
+                    source_service=item.get("source_service", ""),
+                    target_service=item.get("target_service", ""),
+                    topic=item.get("topic", ""),
+                    payload=json.dumps(item.get("payload", "")) if item.get("payload") is not None else "",
+                    reason=item.get("reason", ""),
+                    attempt_count=int(item.get("attempt_count", 0)),
+                    timestamp_ms=int(item.get("timestamp_ms", 0))
+                )
+                resp.items.append(p)
+            return resp
+        except Exception as e:
+            print(f"Error listing deadletters: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+            return message_pb2.ListDeadLettersResponse()
+    
     def SendMessage(self, request, context):
         """Handle gRPC message publishing with fair dispatch support (via custom broker)."""
         try:
@@ -238,6 +341,8 @@ def serve_grpc():
 
 
 
+
+
 @app.get("/health")
 def health():
     return {
@@ -298,6 +403,61 @@ def consume(topic: str, max_messages: int = 1):
         "broker": "custom_durable_file_backed"
     }
 
+@app.post("/deadletter/publish")
+def publish_deadletter(payload: dict):
+    """
+    Persist a dead-letter JSON object to the dead-letter store.
+    Expected JSON shape:
+      {
+        "id": "orig-id",
+        "source_service": "producer",
+        "target_service": "consumer",
+        "topic": "topic.name",
+        "payload": {...},
+        "reason": "description",
+        "attempt_count": 3,
+        "timestamp_ms": 1234567890
+      }
+    """
+    try:
+        # Basic sanity
+        topic = payload.get("topic", "unknown")
+        # Add fallback fields
+        entry = {
+            "id": payload.get("id") or str(uuid4()),
+            "source_service": payload.get("source_service"),
+            "target_service": payload.get("target_service"),
+            "topic": topic,
+            "payload": payload.get("payload"),
+            "reason": payload.get("reason"),
+            "attempt_count": int(payload.get("attempt_count") or 0),
+            "timestamp_ms": int(payload.get("timestamp_ms") or int(time.time() * 1000))
+        }
+        broker.publish_dead_letter(topic, entry)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/deadletter/list")
+def list_deadletters(limit: int = 100):
+    try:
+        items = broker.list_dead_letters(limit=limit)
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/deadletter/list/{topic}")
+def list_deadletters_for_topic(topic: str, limit: int = 100):
+    """
+    List dead-letter messages for a specific topic.
+    Example: GET /deadletter/list/my.topic?limit=50
+    """
+    try:
+        items = broker.list_dead_letters_for_topic(topic, limit=limit)
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class CircuitBreaker:
