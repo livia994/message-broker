@@ -42,7 +42,7 @@ A high-performance, durable message broker implementation built with Python, Fas
     (.jsonl files)     (Persistent)
 ```
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Python 3.9+
@@ -208,7 +208,7 @@ message ReceiveMessageResponse {
 }
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
