@@ -39,8 +39,6 @@ class PublishRequest(BaseModel):
 
 class DurableQueueBroker:
     """
-    Very simple, file-backed durable queue broker.
-
     - Each topic is a separate queue.
     - Messages are kept in memory (deque) and persisted to disk as JSON Lines.
     - Dead letters are persisted under <data_dir>/dead_letters/<topic>.jsonl
@@ -340,9 +338,6 @@ def serve_grpc():
     server.wait_for_termination()
 
 
-
-
-
 @app.get("/health")
 def health():
     return {
@@ -407,17 +402,6 @@ def consume(topic: str, max_messages: int = 1):
 def publish_deadletter(payload: dict):
     """
     Persist a dead-letter JSON object to the dead-letter store.
-    Expected JSON shape:
-      {
-        "id": "orig-id",
-        "source_service": "producer",
-        "target_service": "consumer",
-        "topic": "topic.name",
-        "payload": {...},
-        "reason": "description",
-        "attempt_count": 3,
-        "timestamp_ms": 1234567890
-      }
     """
     try:
         # Basic sanity
@@ -456,6 +440,22 @@ def list_deadletters_for_topic(topic: str, limit: int = 100):
     try:
         items = broker.list_dead_letters_for_topic(topic, limit=limit)
         return {"items": items, "count": len(items)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/topics")
+def list_topics():
+    """
+    Return all existing topics from the broker
+    """
+    try:
+        with broker._lock:
+            topics = list(broker._queues.keys())
+
+        return {
+            "topics": sorted(topics),
+            "count": len(topics)
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
